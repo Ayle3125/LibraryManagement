@@ -1,0 +1,303 @@
+from django.shortcuts import render, render_to_response
+from django.template import Context, RequestContext
+from django.http import HttpResponse, HttpResponseRedirect
+from django import forms
+from django.contrib.auth.models import User
+from django.contrib import auth
+from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
+from models import *
+
+
+def get_type_list():
+	book_list = Book.objects.all()
+	type_list = set()
+	for book in book_list:
+		type_list.add(book.typ)
+	return list(type_list)
+
+
+def index(req):
+	username = req.session.get('username', '')
+	if username:
+		user = MyUser.objects.get(user__username=username)
+	else:
+		user = ''
+	content = {'active_menu': 'homepage', 'user': user}
+	return render_to_response('index.html', content)
+
+
+def signup(req):
+	if req.session.get('username', ''):
+		return HttpResponseRedirect('/')
+	status = ''
+	if req.POST:
+		post = req.POST
+		passwd = post.get('passwd', '')
+		repasswd = post.get('repasswd', '')
+		if passwd != repasswd:
+                        status = 're_err'
+		else:
+                        username = post.get('username', '')
+                        if len(username) == 10:
+                            flag = True;
+                        else:
+                            flag = False;
+                        if flag:
+			    for char in username:
+                                if char.isdigit() == False:
+                                    flag = False
+			if User.objects.filter(username=username):
+		                    status = 'user_exist'
+			elif flag:
+				newuser = User.objects.create_user(username=username, password=passwd, email=post.get('email', ''))
+				newuser.save()
+				new_myuser = MyUser(user=newuser, nickname=post.get('nickname'), permission=1)
+				new_myuser.save()
+				status = 'success'
+                        if flag == False:
+                                status = 'user_exist'
+	content = {'active_menu': 'homepage', 'status': status, 'user': ''}
+	return render_to_response('signup.html', content, context_instance=RequestContext(req))
+
+
+def login(req):
+	if req.session.get('username', ''):
+		return HttpResponseRedirect('/')
+	status = ''
+	if req.POST:
+		post = req.POST
+		username = post.get('username', '')
+		password = post.get('passwd', '')
+		user = auth.authenticate(username=username, password=password)
+		if user is not None:
+			if user.is_active:
+				auth.login(req, user)
+				req.session['username'] = username
+				return HttpResponseRedirect('/')
+			else:
+				status = 'not_active'
+		else:
+			status = 'not_exist_or_passwd_err'
+	content = {'active_menu': 'homepage', 'status': status, 'user': ''}
+	return render_to_response('login.html', content, context_instance=RequestContext(req))
+
+
+def logout(req):
+	auth.logout(req)
+	return HttpResponseRedirect('/')
+
+
+def setpasswd(req):
+	username = req.session.get('username', '')
+	if username != '':
+		user = MyUser.objects.get(user__username=username)
+	else:
+		return HttpResponseRedirect('/login/')
+	status = ''
+	if req.POST:
+		post = req.POST
+		if user.user.check_password(post.get('old', '')):
+			if post.get('new', '') == post.get('new_re', ''):
+				user.user.set_password(post.get('new', ''))
+				user.user.save()
+				status = 'success'
+			else:
+				status = 're_err'
+		else:
+			status = 'passwd_err'
+	content = {'user': user, 'active_menu': 'homepage', 'status': status}
+	return render_to_response('setpasswd.html', content, context_instance=RequestContext(req))
+
+
+def addbook(req):
+	username = req.session.get('username', '')
+	if username != '':
+		user = MyUser.objects.get(user__username=username)
+	else:
+		return HttpResponseRedirect('/login/')
+	if user.permission < 2:
+		return HttpResponseRedirect('/')
+	status = ''
+	if req.POST:
+		post = req.POST
+		newbook = Book(
+			name=post.get('name',''), \
+			author=post.get('author',''), \
+			typ=post.get('typ',''), \
+			price=post.get('price', ''), \
+			pubDate=post.get('pubdate', ''), \
+			)
+		newbook.save()
+		status = 'success'
+	content = {'user': user, 'active_menu': 'addbook', 'status': status}
+	return render_to_response('addbook.html', content, context_instance=RequestContext(req))
+
+
+def viewbook(req):
+	username = req.session.get('username', '')
+	if username != '':
+		user = MyUser.objects.get(user__username=username)
+	else:
+		user = ''
+	type_list = get_type_list()
+	book_type = req.GET.get('typ', 'all')
+	if book_type == '':
+		book_lst = Book.objects.all()
+	elif book_type not in type_list:
+		book_type = 'all'
+		book_lst = Book.objects.all()
+	else:
+		book_lst = Book.objects.filter(typ=book_type)
+
+	if req.POST:
+		post = req.POST
+		keywords = post.get('keywords','')
+		book_lst = Book.objects.filter(name__contains=keywords)
+		book_type = 'all'
+
+	paginator = Paginator(book_lst, 5)
+	page = req.GET.get('page')
+	try:
+		book_list = paginator.page(page)
+	except PageNotAnInteger:
+		book_list = paginator.page(1)
+	except EmptyPage:
+		book_list = paginator.page(paginator.num_pages)
+
+	content = {'user': user, 'active_menu': 'viewbook', 'type_list': type_list, 'book_type': book_type, 'book_list': book_list}
+	return render_to_response('viewbook.html', content, context_instance=RequestContext(req))
+
+
+def mybook(req):
+	username = req.session.get('username', '')
+        if username != '':
+                try:
+                    userID = MyUser.objects.get(user__username=username)
+                except:
+                    return HttpResponseRedirect('/viewbook/')
+                record_list = Record.objects.filter(user = userID).all()
+        else:
+                content = {
+                      "msg": "Please log in."
+                }
+    	        return render_to_response('lend.html',  content)
+	
+	content = {'user': userID, 'active_menu': 'mybook', 'record_list': record_list}
+	return render_to_response('mybook.html', content, context_instance=RequestContext(req))
+
+
+def handlebook(req):
+	username = req.session.get('username', '')
+        if username != '':
+                userID = MyUser.objects.get(user__username=username)
+        else:
+                content = {
+                      "msg": "Please log in."
+                }
+    	        return render_to_response('lend.html',  content)
+	
+	syn = req.GET.get('syn', '')
+        if syn == '':
+                list_type=0
+                record_list = Record.objects.all()
+        else:
+                list_type=1
+                tmp_record_list = Record.objects.all()
+                record_list = []
+                for re in tmp_record_list:
+                    if re.state > 0:
+                        record_list.append(re)
+	content = {'user': userID, 'active_menu': 'handlebook', 'record_list': record_list,'list_type':list_type}
+	return render_to_response('handlebook.html', content, context_instance=RequestContext(req))
+
+
+def detail(req):
+	username = req.session.get('username','')
+	if username != '':
+		user = MyUser.objects.get(user__username=username)
+	else:
+		user = ''
+	Id = req.GET.get('id','')
+	if Id == '':
+		return HttpResponseRedirect('/viewbook/')
+	try:
+		book = Book.objects.get(pk=Id)
+	except:
+		return HttpResponseRedirect('/viewbook/')
+	img_list = Img.objects.filter(book=book)
+	content = {'user': user, 'active_menu': 'viewbook', 'book': book, 'img_list':img_list}
+	return render_to_response('detail.html', content, context_instance=RequestContext(req))
+
+
+def borrowbook(req):
+	username = req.session.get('username','')
+	if username != '':
+		uuser = MyUser.objects.get(user__username=username)
+	else:
+                content = {
+                      "msg": "Please log in."
+                }
+		return render_to_response('lend.html',  content)
+	Id = req.GET.get('id','')
+	if Id == '':
+		return HttpResponseRedirect('/viewbook/')
+	try:
+		bbook = Book.objects.get(pk=Id)
+	except:
+		return HttpResponseRedirect('/viewbook/')
+        if bbook.status == 'Available':
+ 	        bbook.num = bbook.num -1
+                if bbook.num < 1:
+                    bbook.status = "borrowed"
+                bbook.save()
+                record = Record(book=bbook, user=uuser, borrow_time =datetime.datetime.today(), should_back_time = datetime.datetime.today()+datetime.timedelta(days=30), state = 1)
+                record.save()
+                content = {
+                    "msg": "Requset successfully, please waiting for the manager."
+                }
+        else:
+                content = {
+                    "msg": "ERROR! Please try again."
+                }
+	return render_to_response('lend.html', content)
+
+
+def changestate(req):
+	username = req.session.get('username','')
+	if username != '':
+		uuser = MyUser.objects.get(user__username=username)
+	else:
+                content = {
+                      "msg": "Please log in."
+                }
+		return render_to_response('lend.html',  content)
+	Id = req.GET.get('id','')
+        statechoice = req.GET.get('statechoice','')
+	if Id == '':
+		return HttpResponseRedirect('/viewbook/')
+	try:
+		rrecord = Record.objects.get(pk=Id)
+	except:
+		return HttpResponseRedirect('/viewbook/')
+        if int(statechoice) > 0:
+                rrecord.state = statechoice
+                content = {"msg": "Requset successfully, please waiting for the manager."}
+        else:
+                if int(statechoice) == -2:
+                        rrecord.state = statechoice
+                        rrecord.real_back_time = datatime.datatime.today()
+                elif int(statechoice) == -1:
+                        if rrecord.state == 1:
+                            rrecord.state = -1
+                        else:
+                            rrecord.state = 0
+                elif int(statechoice) == 0:
+                        rrecord.state = 0
+                        if rrecord.state == 2:
+                                rrecord.should_back_time = rrecord.should_back_time + datetime.timedelta(days=10)
+                content = {"msg": "Request successfully!" }
+        
+        rrecord.save()
+	return render_to_response('lend.html', content)
+
+
